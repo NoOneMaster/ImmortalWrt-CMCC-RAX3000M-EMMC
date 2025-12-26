@@ -437,20 +437,20 @@ jobs:
           cd openwrt
           make download -j$(nproc) V=s || { echo "❌ 下载依赖包失败"; exit 1; }
 
-      - name: 添加 OpenClash 和 微信推送
-        run: |
-          cd openwrt
-          if [ "$ENABLE_OPENCLASH" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-          fi
-          if [ "$ENABLE_WECHATPUSH" = "true" ]; then
-            echo ">>> 注入微信推送配置项..."
-            echo "CONFIG_PACKAGE_jq=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
-            echo ">>> 执行 make defconfig，解析依赖关系"
-          fi
-          make defconfig
+      #- name: 添加 OpenClash 和 微信推送
+      #  run: |
+      #    cd openwrt
+      #    if [ "$ENABLE_OPENCLASH" = "true" ]; then
+      #      echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+      #    fi
+      #    if [ "$ENABLE_WECHATPUSH" = "true" ]; then
+      #      echo ">>> 注入微信推送配置项..."
+      #      echo "CONFIG_PACKAGE_jq=y" >> .config
+      #      echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+      #      echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+      #      echo ">>> 执行 make defconfig，解析依赖关系"
+      #    fi
+      #    make defconfig
 
       - name: 编译固件
         id: compile
