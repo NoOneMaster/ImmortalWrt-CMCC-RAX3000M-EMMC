@@ -47,11 +47,11 @@ on:
         options:
           - '24.10-6.6.config'
           - '24.10-6.6-office.config'
-      enable_keepalived:
-        description: '集成keepalived'
-        type: boolean
-        required: true
-        default: true
+      # enable_keepalived:
+      #  description: '集成keepalived'
+      #  type: boolean
+      #  required: true
+      #  default: false
       ssh:
         description: 'SSH connection to Actions'
         type: boolean
@@ -66,12 +66,12 @@ on:
       #   description: '集成openclash'
       #   type: boolean
       #   required: true
-      #   default: true
+      #   default: false
       # enable_wechatpush:
       #   description: '集成wechatpush'
       #   type: boolean
       #   required: true
-      #   default: true
+      #   default: false
 
   schedule:
     - cron: '0 6 * * 1'
@@ -94,9 +94,9 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
   BUILD_COMMIT_MSGS_FILE: ''
   CHECKED_COMMIT_MSGS_FILE: ''
-  ENABLE_KEEPALIVED: ${{ github.event.inputs.enable_keepalived || 'true' }}
-  ENABLE_OPENCLASH: ${{ github.event.inputs.enable_openclash || 'false' }}
-  ENABLE_WECHATPUSH: ${{ github.event.inputs.enable_wechatpush || 'false' }}
+#  ENABLE_KEEPALIVED: ${{ github.event.inputs.enable_keepalived || 'true' }}
+#  ENABLE_OPENCLASH: ${{ github.event.inputs.enable_openclash || 'false' }}
+#  ENABLE_WECHATPUSH: ${{ github.event.inputs.enable_wechatpush || 'false' }}
 
 jobs:
   check-source-updates:
