@@ -101,6 +101,7 @@ env:
 jobs:
   check-source-updates:
     runs-on: ubuntu-22.04
+    name: 检测源仓库更新
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
       latest_commit_message: ${{ steps.check.outputs.LATEST_COMMIT_MESSAGE }}
@@ -166,11 +167,11 @@ jobs:
             fi
           fi
 
-  build:
+  build-base:
     needs: check-source-updates
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || needs.check-source-updates.outputs.should_build == 'true'
     runs-on: ubuntu-22.04
-    name: 编译 ${{ matrix.device_model }}
+    name: 编译 ${{ matrix.device_model }} 基础固件
     strategy:
       matrix:
         device_model: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.device_model && fromJSON(format('["{0}"]', github.event.inputs.device_model)) || fromJSON('["cmcc_rax3000m"]') }}
@@ -321,11 +322,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          # Key 增加 run_id 确保每次都能存入新数据，restore-keys 确保能搜到旧数据
-          key: ccache-${{ matrix.device_model }}-${{ env.REPO_BRANCH }}-${{ github.run_id }}
+          key: ccache-${{ matrix.device_model }}-${{ env.REPO_BRANCH }}
           restore-keys: |
-            ccache-${{ matrix.device_model }}-${{ env.REPO_BRANCH }}-
             ccache-${{ matrix.device_model }}-
+            ccache-
 
       - name: 统一配置 ccache
         run: |
@@ -439,34 +439,25 @@ jobs:
 
       - name: 阶段1.2：编译纯净固件
         run: |
-          set -euo pipefail
+          set -e
           cd openwrt
-
-          make -j$(nproc) V=s 2>&1 | tee build.log | grep --line-buffered -E "^make\[[0-9]+\] -C.*compile|error:|failed" || {
-            echo "----------------------------------------------------"
-            echo "❌ 编译失败，显示最后 100 行错误日志："
-            tail -n 100 build.log
-            exit 1
-          }
-          echo "✅ 编译成功: $(date)"
+          make -j$(nproc) || make -j4 || make -j1 V=s
+          df -hT
 
       - name: 阶段1.3：输出 ccache 统计
         run: |
           ccache -s
           du -sh ${{ env.CCACHE_DIR }}
 
-      # ----------------------------------
-      # 阶段 2：在已编译环境上添加插件再编译
-      # ----------------------------------
-      - name: 阶段2.0：清理阶段1构建产物
+      - name: 阶段1.4：清理阶段1构建产物
         run: |
           df -hT
           cd openwrt
 
-          echo ">>> 清理 build_dir（阶段1产物）"
+          echo ">>> 清理 build_dir"
           rm -rf build_dir/target-* build_dir/toolchain-*
 
-          echo ">>> 清理 staging_dir（阶段1产物）"
+          echo ">>> 清理 staging_dir"
           rm -rf staging_dir/target-* staging_dir/toolchain-*
 
           echo ">>> 清理 tmp 目录"
@@ -475,7 +466,7 @@ jobs:
           echo ">>> 清理 luci-app-build 临时目录"
           rm -rf luci-app-build || true
 
-          echo ">>> 清理 bin 目录（阶段1固件）"
+          echo ">>> 清理 bin 目录"
           rm -rf bin || true
 
           echo ">>> 清理 dl 中的临时文件"
@@ -490,7 +481,76 @@ jobs:
           echo ">>> 清理完成，当前磁盘空间："
           df -hT
 
-      - name: 阶段2.1：添加自定义配置
+      - name: 保存跨 Job 变量
+        run: |
+          cd openwrt
+
+          # 保存本仓库 commit 信息
+          if [ -n "$BUILD_COMMIT_MSGS_FILE" ] && [ -f "$BUILD_COMMIT_MSGS_FILE" ]; then
+            cp "$BUILD_COMMIT_MSGS_FILE" build_commit_msgs.txt
+          else
+            echo "" > build_commit_msgs.txt
+          fi
+
+          # 保存源仓库 commit 信息
+          if [ -n "$CHECKED_COMMIT_MSGS_FILE" ] && [ -f "$CHECKED_COMMIT_MSGS_FILE" ]; then
+            cp "$CHECKED_COMMIT_MSGS_FILE" checked_commit_msgs.txt
+          else
+            echo "" > checked_commit_msgs.txt
+          fi
+
+          # 保存源码提交链接
+          echo "${SOURCE_COMMIT_URL:-}" > source_commit_url.txt
+
+          # 保存触发方式
+          echo "${EVENT_TRIGGER_METHOD:-}" > event_trigger_method.txt
+
+      - name: 上传基础构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-base-${{ matrix.device_model }}
+          path: |
+            openwrt
+
+  build-final:
+    needs: build-base
+    runs-on: ubuntu-22.04
+    name: 编译 ${{ matrix.device_model }} 最终固件
+    steps:
+      - name: 下载 Job1 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: openwrt-base-${{ matrix.device_model }}
+          path: .
+
+      - name: 恢复跨 Job 变量
+        run: |
+          cd openwrt
+
+          # 恢复本仓库 commit 信息
+          if [ -f build_commit_msgs.txt ]; then
+            echo "BUILD_COMMIT_MSGS_FILE=$(pwd)/build_commit_msgs.txt" >> $GITHUB_ENV
+          fi
+
+          # 恢复源仓库 commit 信息
+          if [ -f checked_commit_msgs.txt ]; then
+            echo "CHECKED_COMMIT_MSGS_FILE=$(pwd)/checked_commit_msgs.txt" >> $GITHUB_ENV
+          fi
+
+          # 恢复源码提交链接
+          if [ -f source_commit_url.txt ]; then
+            echo "SOURCE_COMMIT_URL=$(cat source_commit_url.txt)" >> $GITHUB_ENV
+          fi
+
+          # 恢复触发方式
+          if [ -f event_trigger_method.txt ]; then
+            echo "EVENT_TRIGGER_METHOD=$(cat event_trigger_method.txt)" >> $GITHUB_ENV
+          fi
+
+      # ----------------------------------
+      # 阶段 2：在已编译环境上添加插件再编译
+      # ----------------------------------
+      - name: 阶段2.0：添加自定义配置
         run: |
           cd openwrt
 
@@ -513,7 +573,7 @@ jobs:
           # Rust 禁用永远执行
           inject_config "$GITHUB_WORKSPACE/config/rust_disable.config"
 
-      - name: 阶段2.2：添加 keepalived-ha 插件
+      - name: 阶段2.1：添加 keepalived-ha 插件
         if: env.ENABLE_KEEPALIVED == 'true'
         run: |
           cd openwrt
@@ -523,39 +583,24 @@ jobs:
           echo ">>> 检查 keepalived-ha 是否启用："
           grep luci-app-keepalived-ha .config || echo "❌ keepalived-ha 未启用"
 
-      - name: 阶段2.3：生成最终编译配置
+      - name: 阶段2.2：生成最终编译配置
         run: |
           cd openwrt
           make defconfig
           echo ">>> 检查 Rust 是否被禁用："
           grep -E "RUST|sing-box|alist|ripgrep|fd|btop|zellij|exa" .config || echo "Rust 已完全禁用"
 
-      - name: 阶段2.4：下载源码
+      - name: 阶段2.3：下载源码
         run: |
           cd openwrt
           make download -j$(nproc)
 
-      - name: 阶段2.5：编译最终固件
+      - name: 阶段2.4：编译最终固件
         id: compile
-        shell: bash
         run: |
+          set -e
           cd openwrt
-          echo "开始编译最终固件..."
-
-          make -j$(nproc) V=s 2>&1 | tee build2.log | grep --line-buffered -E "^make\[[0-9]+\] -C.*compile|error:|failed" || true
-
-          # 获取 make 的退出状态
-          MAKE_EXIT=${PIPESTATUS[0]}
-
-          if [ "$MAKE_EXIT" -ne 0 ]; then
-            echo "----------------------------------------------------"
-            echo "❌ 编译失败，正在分析 build2.log 中的核心错误："
-            echo "----------------------------------------------------"
-            # 这里的 grep 是为了在满屏的精简日志中，帮你把真正的报错找出来
-            grep -i -C 3 "error:" build2.log || tail -n 200 build2.log
-            exit 1
-          fi
-
+          make -j$(nproc) || make -j4 || make -j1 V=s
           echo "status=success" >> $GITHUB_OUTPUT
           echo "DEVICE_NAME=_${{ matrix.device_model }}" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
