@@ -163,23 +163,20 @@ jobs:
     needs: check-source-updates
     if: github.event_name == 'workflow_dispatch' || needs.check-source-updates.outputs.should_build == 'true'
     runs-on: ubuntu-22.04
-    name: 编译 ${{ matrix.device_model }} 固件
-    strategy:
-      matrix:
-        device_model: ${{ github.event.inputs.device_model && fromJSON(format('["{0}"]', github.event.inputs.device_model)) || fromJSON('["cmcc_rax3000m"]') }}
-      max-parallel: 1
-    env:
-      MATRIX_DEVICE_MODEL: ${{ matrix.device_model }}
+    name: 编译 ${{ github.event.inputs.device_model || 'cmcc_rax3000m' }} 固件
     outputs:
+      device_model: ${{ steps.device.outputs.device_model }}
       need_second_build: ${{ steps.need-second-build.outputs.NEED_SECOND_BUILD }}
     steps:
       - name: 调试信息
+        id: device
         run: |
           echo "触发方式: ${{ github.event_name }}"
           echo "EVENT_TRIGGER_METHOD=${{ github.event_name }}" >> $GITHUB_ENV
-          echo "设备型号: ${{ matrix.device_model }}"
+          echo "设备型号: ${{ github.event.inputs.device_model }}"
           echo "上传 bin 目录: ${{ github.event.inputs.upload_bin_dir }}"
           echo "上传 packages 目录: ${{ github.event.inputs.upload_packages_dir }}"
+          echo "device_model=${{ github.event.inputs.device_model }}" >> $GITHUB_OUTPUT
 
       - name: 判断是否需要第二次编译
         id: need-second-build
@@ -298,9 +295,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ matrix.device_model }}-${{ env.REPO_BRANCH }}
+          key: ccache-${{ steps.device.outputs.device_model }}-${{ env.REPO_BRANCH }}
           restore-keys: |
-            ccache-${{ matrix.device_model }}-
+            ccache-${{ steps.device.outputs.device_model }}-
             ccache-
 
       - name: 配置 ccache
@@ -350,11 +347,45 @@ jobs:
           echo "当前源码提交链接: $COMMIT_URL"
           # 写入环境变量
           echo "SOURCE_COMMIT_URL=$COMMIT_URL" >> $GITHUB_ENV
+          VERSION=$(git rev-parse --short HEAD || echo "unknown")
+          echo "SOURCE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "$VERSION" > source_version.txt
 
       - name: 移动 last_checked_sha 到根目录
         run: |
           mv /workdir/last_checked_sha.txt ./last_checked_sha.txt || true
           [ -f last_checked_sha.txt ] && cat last_checked_sha.txt || true
+
+      - name: 生成 Release 描述文件
+        run: |
+          {
+            echo "## 📦 固件信息"
+            echo "设备型号: ${{ steps.device.outputs.device_model }}"
+            echo "编译时间: $(date +'%Y-%m-%d %H:%M %Z')"
+            echo "源代码仓库: $REPO_URL"
+            echo "源仓库分支: $REPO_BRANCH"
+            echo "源仓库提交: [查看编译时提交](${SOURCE_COMMIT_URL:-未知})"
+            echo "触发方式: ${EVENT_TRIGGER_METHOD:-unknown}"
+
+            echo ""
+            echo "## 📝 更新内容"
+
+            if [ -n "$BUILD_COMMIT_MSGS_FILE" ] && [ -s "$BUILD_COMMIT_MSGS_FILE" ]; then
+              echo "### 📌 本仓库更新"
+              cat "$BUILD_COMMIT_MSGS_FILE"
+            fi
+
+            if [ -n "$CHECKED_COMMIT_MSGS_FILE" ] && [ -s "$CHECKED_COMMIT_MSGS_FILE" ]; then
+              echo "### 📌 源仓库更新"
+              cat "$CHECKED_COMMIT_MSGS_FILE"
+            fi
+
+            echo ""
+            echo "## 🔧 刷机说明"
+            echo "1. 使用 sysupgrade 固件进行升级。"
+            echo "2. 若启用了“上传所有文件”，请谨慎使用 GPT、preloader、FIP 等文件，它们仅用于底层恢复。"
+            echo "3. 如需救砖，可使用 initramfs-recovery 从 U-Boot 启动恢复系统。"
+          } > openwrt/release
 
       - name: 加载 Feeds & DIY1
         timeout-minutes: 15
@@ -384,7 +415,7 @@ jobs:
         run: |
           [ -e files ] && mv files openwrt/files
           [ -e config/$CONFIG_FILE ] && mv config/$CONFIG_FILE openwrt/.config
-          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${{ matrix.device_model }}=y" >> openwrt/.config
+          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${{ steps.device.outputs.device_model }}=y" >> openwrt/.config
           echo "CONFIG_CCACHE=y" >> openwrt/.config
           chmod +x $DIY_P2_SH
           cd openwrt
@@ -423,34 +454,10 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/firmware-base
           cp -r . $GITHUB_WORKSPACE/firmware-base/
 
-      - name: 保存跨 Job 变量
-        run: |
-          cd openwrt
-
-          # 保存本仓库 commit 信息
-          if [ -n "$BUILD_COMMIT_MSGS_FILE" ] && [ -f "$BUILD_COMMIT_MSGS_FILE" ]; then
-            cp "$BUILD_COMMIT_MSGS_FILE" build_commit_msgs.txt
-          else
-            echo "" > build_commit_msgs.txt
-          fi
-
-          # 保存源仓库 commit 信息
-          if [ -n "$CHECKED_COMMIT_MSGS_FILE" ] && [ -f "$CHECKED_COMMIT_MSGS_FILE" ]; then
-            cp "$CHECKED_COMMIT_MSGS_FILE" checked_commit_msgs.txt
-          else
-            echo "" > checked_commit_msgs.txt
-          fi
-
-          # 保存源码提交链接
-          echo "${SOURCE_COMMIT_URL:-}" > source_commit_url.txt
-
-          # 保存触发方式
-          echo "${EVENT_TRIGGER_METHOD:-}" > event_trigger_method.txt
-
       - name: 上传基础固件
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-base-${{ matrix.device_model }}
+          name: firmware-base-${{ steps.device.outputs.device_model }}
           path: firmware-base
 
       - name: 清理构建目录体积
@@ -462,7 +469,7 @@ jobs:
       - name: 上传基础构建环境
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-base-${{ matrix.device_model }}
+          name: openwrt-base-${{ steps.device.outputs.device_model }}
           path: openwrt
 
 # ==========================================
@@ -472,41 +479,13 @@ jobs:
     needs: build-base
     if: needs.build-base.outputs.need_second_build == 'true'
     runs-on: ubuntu-22.04
-    name: 编译最终固件 - ${{ matrix.device_model }}
-    strategy:
-      matrix:
-        device_model: ${{ github.event.inputs.device_model && fromJSON(format('["{0}"]', github.event.inputs.device_model)) || fromJSON('["cmcc_rax3000m"]') }}
-      max-parallel: 1
+    name: 编译最终固件 - ${{ needs.build-base.outputs.device_model }}
     steps:
       - name: 下载基础构建环境
         uses: actions/download-artifact@v4
         with:
-          name: openwrt-base-${{ matrix.device_model }}
+          name: openwrt-base-${{ needs.build-base.outputs.device_model }}
           path: .
-
-      - name: 恢复跨 Job 变量
-        run: |
-          cd openwrt
-
-          # 恢复本仓库 commit 信息
-          if [ -f build_commit_msgs.txt ]; then
-            echo "BUILD_COMMIT_MSGS_FILE=$(pwd)/build_commit_msgs.txt" >> $GITHUB_ENV
-          fi
-
-          # 恢复源仓库 commit 信息
-          if [ -f checked_commit_msgs.txt ]; then
-            echo "CHECKED_COMMIT_MSGS_FILE=$(pwd)/checked_commit_msgs.txt" >> $GITHUB_ENV
-          fi
-
-          # 恢复源码提交链接
-          if [ -f source_commit_url.txt ]; then
-            echo "SOURCE_COMMIT_URL=$(cat source_commit_url.txt)" >> $GITHUB_ENV
-          fi
-
-          # 恢复触发方式
-          if [ -f event_trigger_method.txt ]; then
-            echo "EVENT_TRIGGER_METHOD=$(cat event_trigger_method.txt)" >> $GITHUB_ENV
-          fi
 
       - name: 注入 keepalived 等自定义配置
         run: |
@@ -564,7 +543,7 @@ jobs:
       - name: 上传最终固件
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-final-${{ matrix.device_model }}
+          name: firmware-final-${{ needs.build-base.outputs.device_model }}
           path: firmware-final
 
 # ==========================================
@@ -575,11 +554,7 @@ jobs:
       - build-base
       - build-enhanced
     runs-on: ubuntu-22.04
-    name: 上传固件并发布 ${{ matrix.device_model }} Release
-    strategy:
-      matrix:
-        device_model: ${{ github.event.inputs.device_model && fromJSON(format('["{0}"]', github.event.inputs.device_model)) || fromJSON('["cmcc_rax3000m"]') }}
-      max-parallel: 1
+    name: 上传固件并发布 ${{ needs.build-base.outputs.device_model }} Release
     steps:
       - name: 检出本仓库代码
         uses: actions/checkout@v4
@@ -589,30 +564,14 @@ jobs:
       - name: 下载基础构建环境（获取元数据）
         uses: actions/download-artifact@v4
         with:
-          name: openwrt-base-${{ matrix.device_model }}
+          name: openwrt-base-${{ needs.build-base.outputs.device_model }}
           path: ./openwrt-meta
-
-      - name: 恢复跨 Job 变量（从基础构建环境）
-        run: |
-          cd openwrt-meta
-          if [ -f build_commit_msgs.txt ]; then
-            echo "BUILD_COMMIT_MSGS_FILE=$(pwd)/build_commit_msgs.txt" >> $GITHUB_ENV
-          fi
-          if [ -f checked_commit_msgs.txt ]; then
-            echo "CHECKED_COMMIT_MSGS_FILE=$(pwd)/checked_commit_msgs.txt" >> $GITHUB_ENV
-          fi
-          if [ -f source_commit_url.txt ]; then
-            echo "SOURCE_COMMIT_URL=$(cat source_commit_url.txt)" >> $GITHUB_ENV
-          fi
-          if [ -f event_trigger_method.txt ]; then
-            echo "EVENT_TRIGGER_METHOD=$(cat event_trigger_method.txt)" >> $GITHUB_ENV
-          fi
 
       - name: 尝试下载最终固件
         id: dl_final
         uses: actions/download-artifact@v4
         with:
-          name: firmware-final-${{ matrix.device_model }}
+          name: firmware-final-${{ needs.build-base.outputs.device_model }}
           path: firmware
         continue-on-error: true
 
@@ -620,22 +579,15 @@ jobs:
         if: steps.dl_final.outcome != 'success'
         uses: actions/download-artifact@v4
         with:
-          name: firmware-base-${{ matrix.device_model }}
+          name: firmware-base-${{ needs.build-base.outputs.device_model }}
           path: firmware
 
       - name: 规范固件命名
         run: |
           cd firmware/targets/*/* || cd firmware   # 兼容不同目录结构
-          DEVICE_MODEL="${{ matrix.device_model }}"
+          DEVICE_MODEL="${{ needs.build-base.outputs.device_model }}"
 
-          # 尝试从 openwrt-meta 获取源码版本
-          if [ -d "$GITHUB_WORKSPACE/openwrt-meta/.git" ]; then
-            cd "$GITHUB_WORKSPACE/openwrt-meta"
-            VERSION=$(git rev-parse --short HEAD || echo "unknown")
-          else
-            VERSION=$(git rev-parse --short HEAD || echo "unknown")
-          fi
-          SAFE_VERSION="r${VERSION}"
+          SAFE_VERSION="r${{ env.SOURCE_VERSION }}"
           echo "FIRMWARE_VERSION=$SAFE_VERSION" >> $GITHUB_ENV
 
           FILE_DATE="_$(date +'%Y%m%d%H%M')"
@@ -656,53 +608,8 @@ jobs:
         if: env.UPLOAD_FIRMWARE == 'true' && github.event.inputs.upload_bin_dir == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_bin_${{ matrix.device_model }}${{ env.FILE_DATE }}
+          name: OpenWrt_bin_${{ needs.build-base.outputs.device_model }}${{ env.FILE_DATE }}
           path: firmware
-
-      - name: 生成 Release 描述文件
-        run: |
-          set -e
-          if [ -z "${{ env.FIRMWARE_VERSION }}" ]; then
-            echo "Missing FIRMWARE_VERSION"
-            exit 1
-          fi
-          TAG="ImmortalWrt-24.10-${{ matrix.device_model }}-${{ env.FIRMWARE_VERSION }}"
-          echo "RELEASE_TAG=$TAG-$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
-
-          {
-            echo "## 📦 固件信息"
-            echo "固件版本: ImmortalWrt ${{ env.FIRMWARE_VERSION }}"
-            echo "设备型号: ${{ matrix.device_model }}"
-            echo "编译时间: $(date +'%Y-%m-%d %H:%M %Z')"
-            echo "后台地址: 192.168.2.1 或 http://immortalwrt.lan/"
-            echo "源代码仓库: $REPO_URL"
-            echo "源仓库分支: $REPO_BRANCH"
-            echo "源仓库提交: [查看编译时提交](${SOURCE_COMMIT_URL:-未知})"
-            echo "配置文件: $CONFIG_FILE"
-            echo "触发方式: ${EVENT_TRIGGER_METHOD:-unknown}"
-
-            if { [ -n "$BUILD_COMMIT_MSGS_FILE" ] && [ -s "$BUILD_COMMIT_MSGS_FILE" ]; } || \
-                { [ -n "$CHECKED_COMMIT_MSGS_FILE" ] && [ -s "$CHECKED_COMMIT_MSGS_FILE" ]; }; then
-              echo ""
-              echo "## 📝 更新内容"
-              if [ -n "$BUILD_COMMIT_MSGS_FILE" ] && [ -s "$BUILD_COMMIT_MSGS_FILE" ]; then
-                echo "### 📌 本仓库更新"
-                cat "$BUILD_COMMIT_MSGS_FILE"
-              fi
-              if [ -n "$CHECKED_COMMIT_MSGS_FILE" ] && [ -s "$CHECKED_COMMIT_MSGS_FILE" ]; then
-                echo "### 📌 源仓库更新"
-                cat "$CHECKED_COMMIT_MSGS_FILE"
-              fi
-            fi
-
-            echo ""
-            echo "## 🔧 刷机说明"
-            echo "1. 使用 sysupgrade 固件进行升级。"
-            echo "2. 若启用了“上传所有文件”，请谨慎使用 GPT、preloader、FIP 等文件，它们仅用于底层恢复。"
-            echo "3. 如需救砖，可使用 initramfs-recovery 从 U-Boot 启动恢复系统。"
-          } > release
-
-          cat release
 
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
@@ -710,7 +617,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          body_path: release
+          body_path: openwrt-meta/release
           files: |
             ${{ env.UPLOAD_ALL_FILES == 'true' && format('{0}/*', env.FIRMWARE) || format('{0}/*sysupgrade*.*', env.FIRMWARE) }}
 
