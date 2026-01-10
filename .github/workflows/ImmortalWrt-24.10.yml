@@ -396,13 +396,18 @@ jobs:
           cd openwrt
           cat $GITHUB_WORKSPACE/config/openclash.config >> .config
 
-      - name: 编译基础固件
+      - name: 初始化编译环境
         run: |
           set -e
           cd openwrt
           sed -i '/RUST\|sing-box\|alist\|ripgrep\|fd\|btop\|zellij\|starship\|exa/d' .config
           make defconfig
           make download -j$(nproc)
+
+      - name: 编译基础固件
+        run: |
+          set -e
+          cd openwrt
           make -j$(nproc) || make -j4 || make -j1 V=s
           df -hT
 
@@ -533,14 +538,19 @@ jobs:
           echo ">>> 检查 keepalived-ha 是否启用："
           grep luci-app-keepalived-ha .config || echo "❌ keepalived-ha 未启用"
 
-      - name: 编译最终固件
-        id: compile
+      - name: 初始化编译环境
         run: |
           set -e
           cd openwrt
           make defconfig
           echo ">>> 检查 Rust 是否被禁用："
           grep -E "RUST|sing-box|alist|ripgrep|fd|btop|zellij|exa" .config || echo "Rust 已完全禁用"
+
+      - name: 编译最终固件
+        id: compile
+        run: |
+          set -e
+          cd openwrt
           make download -j$(nproc)
           make -j$(nproc) || make -j4 || make -j1 V=s
 
