@@ -209,7 +209,7 @@ jobs:
           path: last_build_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-last-build-sha
 
-      - name: 生成本仓库更新日志（写入临时文件）
+      - name: 生成本仓库更新日志
         run: |
           if [ -f last_build_sha.txt ]; then
             LAST_BUILD_SHA=$(cat last_build_sha.txt)
@@ -255,7 +255,7 @@ jobs:
 
       - name: 清理磁盘空间
         run: |
-          echo ">>> 清理预装软件（dotnet/android/haskell/CodeQL）"
+          echo ">>> 清理预装软件"
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
@@ -348,7 +348,7 @@ jobs:
           CURRENT_SHA=$(git rev-parse HEAD)
           COMMIT_URL="${REPO_URL}/commit/${CURRENT_SHA}"
           echo "当前源码提交链接: $COMMIT_URL"
-          # 写入环境变量（供后续步骤使用）
+          # 写入环境变量
           echo "SOURCE_COMMIT_URL=$COMMIT_URL" >> $GITHUB_ENV
 
       - name: 移动 last_checked_sha 到根目录
@@ -642,7 +642,7 @@ jobs:
           echo "FIRMWARE=$(pwd)" >> $GITHUB_ENV
           ls -la
 
-      - name: 上传 bin 目录（可选）
+      - name: 上传 bin 目录
         if: env.UPLOAD_FIRMWARE == 'true' && github.event.inputs.upload_bin_dir == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -704,7 +704,7 @@ jobs:
           files: |
             ${{ env.UPLOAD_ALL_FILES == 'true' && format('{0}/*', env.FIRMWARE) || format('{0}/*sysupgrade*.*', env.FIRMWARE) }}
 
-      - name: 保存此次提交 sha（本仓库）
+      - name: 保存本仓库此次提交 sha
         run: |
           echo "$(git rev-parse HEAD)" > last_build_sha.txt
 
